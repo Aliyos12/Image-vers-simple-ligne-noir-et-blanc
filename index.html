@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image vers Points SVG avec Espacement</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .control-group {
+            background-color: #f8f8f8;
+            padding: 15px;
+            border-radius: 4px;
+        }
+        .preview {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        canvas {
+            max-width: 100%;
+            border: 1px solid #ccc;
+        }
+        svg {
+            max-width: 100%;
+            background-color: #e0e0e0;
+            border: 1px solid #ccc;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="range"] {
+            width: 100%;
+        }
+        .value-display {
+            font-size: 0.9em;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Convertisseur Image vers Points SVG avec Espacement</h1>
+        
+        <div class="controls">
+            <div class="control-group">
+                <input type="file" id="imageInput" accept="image/*">
+            </div>
+            
+            <div class="control-group">
+                <label for="strokeWidth">Épaisseur de trait</label>
+                <input type="range" id="strokeWidth" min="1" max="20" value="2" step="0.5">
+                <span class="value-display" id="strokeWidthValue">2 mm</span>
+            </div>
+            
+            <div class="control-group">
+                <label for="darkPoints">Points zones sombres</label>
+                <input type="range" id="darkPoints" min="1000" max="30000" value="5000">
+                <span class="value-display" id="darkPointsValue">5000 points</span>
+            </div>
+            
+            <div class="control-group">
+                <label for="lightPoints">Points zones claires</label>
+                <input type="range" id="lightPoints" min="1000" max="30000" value="5000">
+                <span class="value-display" id="lightPointsValue">5000 points</span>
+            </div>
+
+            <div class="control-group">
+                <label for="darkSpacing">Espacement points sombres</label>
+                <input type="range" id="darkSpacing" min="0" max="20" value="5" step="0.5">
+                <span class="value-display" id="darkSpacingValue">5 px</span>
+            </div>
+
+            <div class="control-group">
+                <label for="lightSpacing">Espacement points clairs</label>
+                <input type="range" id="lightSpacing" min="0" max="20" value="5" step="0.5">
+                <span class="value-display" id="lightSpacingValue">5 px</span>
+            </div>
+            
+            <div class="control-group">
+                <label for="darkThreshold">Luminosité zone sombre</label>
+                <input type="range" id="darkThreshold" min="0" max="255" value="127">
+                <span class="value-display" id="darkThresholdValue">127</span>
+            </div>
+            
+            <div class="control-group">
+                <label for="lightThreshold">Luminosité zone claire</label>
+                <input type="range" id="lightThreshold" min="0" max="255" value="127">
+                <span class="value-display" id="lightThresholdValue">127</span>
+            </div>
+        </div>
+        
+        <div class="preview">
+            <canvas id="imageCanvas"></canvas>
+            <svg id="outputSvg" width="400" height="400"></svg>
+        </div>
+        
+        <div style="margin-top: 20px;">
+            <button id="exportDark">Exporter ligne sombre (SVG)</button>
+            <button id="exportLight">Exporter ligne claire (SVG)</button>
+        </div>
+    </div>
+
+    <script>
+        class ImageProcessor {
+            constructor() {
+                this.canvas = document.getElementById('imageCanvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.svg = document.getElementById('outputSvg');
+                this.setupEventListeners();
+            }
+
+            setupEventListeners() {
+                document.getElementById('imageInput').addEventListener('change', (e) => this.loadImage(e));
+                
+                const controls = [
+                    'strokeWidth', 'darkPoints', 'lightPoints', 
+                    'darkSpacing', 'lightSpacing', 
+                    'darkThreshold', 'lightThreshold'
+                ];
+                
+                controls.forEach(control => {
+                    document.getElementById(control).addEventListener('input', (e) => {
+                        let suffix = '';
+                        if (control === 'strokeWidth') suffix = ' mm';
+                        else if (control.includes('Points')) suffix = ' points';
+                        else if (control.includes('Spacing')) suffix = ' px';
+                        
+                        document.getElementById(`${control}Value`).textContent = e.target.value + suffix;
+                        this.processImage();
+                    });
+                });
+
+                document.getElementById('exportDark').addEventListener('click', () => this.exportSVG('dark'));
+                document.getElementById('exportLight').addEventListener('click', () => this.exportSVG('light'));
+            }
+
+            loadImage(event) {
+                const file = event.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            const maxSize = 1200;
+                            let width = img.width;
+                            let height = img.height;
+                            
+                            if (width > maxSize || height > maxSize) {
+                                if (width > height) {
+                                    height = (height / width) * maxSize;
+                                    width = maxSize;
+                                } else {
+                                    width = (width / height) * maxSize;
+                                    height = maxSize;
+                                }
+                            }
+                            
+                            this.canvas.width = width;
+                            this.canvas.height = height;
+                            this.ctx.drawImage(img, 0, 0, width, height);
+                            this.processImage();
+                        };
+                        img.src = e.target.result;
+                    };
+                    reader.readAsDataURL(file);
+                }
+            }
+
+            processImage() {
+                const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+                const data = imageData.data;
+                const darkPoints = [];
+                const lightPoints = [];
+                
+                const darkThreshold = parseInt(document.getElementById('darkThreshold').value);
+                const lightThreshold = parseInt(document.getElementById('lightThreshold').value);
+                const darkSpacing = parseFloat(document.getElementById('darkSpacing').value);
+                const lightSpacing = parseFloat(document.getElementById('lightSpacing').value);
+
+                for (let y = 0; y < this.canvas.height; y += darkSpacing) {
+                    for (let x = 0; x < this.canvas.width; x += darkSpacing) {
+                        const idx = (Math.floor(y) * this.canvas.width + Math.floor(x)) * 4;
+                        const r = data[idx];
+                        const g = data[idx + 1];
+                        const b = data[idx + 2];
+                        const a = data[idx + 3];
+                        
+                        if (a < 127) continue;
+                        
+                        const brightness = (r + g + b) / 3;
+
+                        if (brightness < darkThreshold) {
+                            darkPoints.push({
+                                x, 
+                                y,
+                                intensity: 1 - (brightness / darkThreshold)
+                            });
+                        }
+                    }
+                }
+
+                for (let y = 0; y < this.canvas.height; y += lightSpacing) {
+                    for (let x = 0; x < this.canvas.width; x += lightSpacing) {
+                        const idx = (Math.floor(y) * this.canvas.width + Math.floor(x)) * 4;
+                        const r = data[idx];
+                        const g = data[idx + 1];
+                        const b = data[idx + 2];
+                        const a = data[idx + 3];
+                        
+                        if (a < 127) continue;
+                        
+                        const brightness = (r + g + b) / 3;
+
+                        if (brightness > lightThreshold) {
+                            lightPoints.push({
+                                x,
+                                y,
+                                intensity: (brightness - lightThreshold) / (255 - lightThreshold)
+                            });
+                        }
+                    }
+                }
+
+                const maxDarkPoints = parseInt(document.getElementById('darkPoints').value);
+                const maxLightPoints = parseInt(document.getElementById('lightPoints').value);
+                
+                const sampledDarkPoints = this.samplePointsByIntensity(darkPoints, maxDarkPoints);
+                const sampledLightPoints = this.samplePointsByIntensity(lightPoints, maxLightPoints);
+
+                this.generateSVG(sampledDarkPoints, sampledLightPoints);
+            }
+
+            samplePointsByIntensity(points, maxPoints) {
+                if (points.length <= maxPoints) return points;
+                
+                // Trier les points par intensité et les grouper par zones
+                points.sort((a, b) => b.intensity - a.intensity);
+                
+                const groups = [];
+                let currentGroup = [points[0]];
+                
+                for (let i = 1; i < points.length; i++) {
+                    const currentPoint = points[i];
+                    const lastPoint = currentGroup[currentGroup.length - 1];
+                    
+                    if (this.distance(currentPoint, lastPoint) < 20) {
+                        currentGroup.push(currentPoint);
+                    } else {
+                        groups.push(currentGroup);
+                        currentGroup = [currentPoint];
+                    }
+                }
+                groups.push(currentGroup);
+
+                // Sélectionner les points en respectant la distribution
+                const selectedPoints = [];
+                let pointsPerGroup = Math.floor(maxPoints / groups.length);
+                
+                groups.forEach(group => {
+                    const step = Math.max(1, Math.floor(group.length / pointsPerGroup));
+                    for (let i = 0; i < group.length && selectedPoints.length < maxPoints; i += step) {
+                        selectedPoints.push(group[i]);
+                    }
+                });
+
+                return selectedPoints;
+            }
+
+            generateSVG(darkPoints, lightPoints) {
+                const strokeWidth = document.getElementById('strokeWidth').value;
+                
+                this.svg.setAttribute('width', this.canvas.width);
+                this.svg.setAttribute('height', this.canvas.height);
+                
+                const darkPath = this.generatePath(darkPoints);
+                const lightPath = this.generatePath(lightPoints);
+
+                this.svg.innerHTML = `
+                    <rect width="100%" height="100%" fill="#e0e0e0"/>
+                    <path d="${darkPath}" stroke="black" fill="none" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="${lightPath}" stroke="white" fill="none" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round"/>
+                `;
+            }
+
+            generatePath(points) {
+                if (points.length === 0) return '';
+                
+                const sortedPoints = this.nearestNeighborSort(points);
+                return 'M ' + sortedPoints.map(p => `${p.x} ${p.y}`).join(' L ');
+            }
+
+            nearestNeighborSort(points) {
+                if (points.length <= 1) return points;
+
+                const sorted = [points[0]];
+                const remaining = points.slice(1);
+
+                while (remaining.length > 0) {
+                    const current = sorted[sorted.length - 1];
+                    let nearestIdx = 0;
+                    let nearestDist = this.distance(current, remaining[0]);
+
+                    for (let i = 1; i < remaining.length; i++) {
+                        const dist = this.distance(current, remaining[i]);
+                        if (dist < nearestDist) {
+                            nearestDist = dist;
+                            nearestIdx = i;
+                        }
+                    }
+
+                    sorted.push(remaining[nearestIdx]);
+                    remaining.splice(nearestIdx, 1);
+                }
+
+                return sorted;
+            }
+
+            distance(p1, p2) {
+                return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+            }
+
+            exportSVG(type) {
+                const svg = this.svg.cloneNode(true);
+                const paths = svg.getElementsByTagName('path');
+                const pathToKeep = type === 'dark' ? paths[0] : paths[1];
+                const otherPath = type === 'dark' ? paths[1] : paths[0];
+                
+                otherPath.remove();
+                
+                const svgContent = svg.outerHTML;
+                const blob = new Blob([svgContent], {type: 'image/svg+xml'});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `ligne_${type}.svg`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
+        }
+
+        new ImageProcessor();
+    </script>
+</body>
+</html>
